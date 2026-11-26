@@ -285,7 +285,7 @@ function Aplicar-PlanoEconomia {
     [void][Energia]::SetScheme($PlanoEquilibrado)
 }
 
-function Aplicar-PlanoDesempenho {
+function Aplicar-PlanoDesempenho([switch]$NaBateria) {
     Set-Todos $SubProcessor $SetProcMin 100
     Set-Todos $SubProcessor $SetProcMax 100
     Set-Todos $SubProcessor $SetBoostMode 2
@@ -309,11 +309,18 @@ function Aplicar-PlanoDesempenho {
     Set-Todos $SubDisk         $SetNvme2Idle    2000
     Set-Todos $SubDisk         $SetNvme1Lat     0
     Set-Todos $SubDisk         $SetNvme2Lat     0
-    # Mantem ESBATTTHRESHOLD=100 no perfil DC (so vale na bateria!)
     Set-TodosDC $SubVideo       $SetVideoIdle   420  # 7 min para desligar a tela na bateria
     Set-TodosDC $SubVideo       $SetVideoDim    400  # esmaece 20s antes (6m40s)
-    Set-TodosDC $SubEnergySaver $SetEsThreshold 100
-    Set-TodosDC $SubEnergySaver $SetEsPolicy    1
+    if ($NaBateria) {
+        # Usuario desligou Economia de Energia na bateria para liberar potencia+GPU:
+        # zera o gatilho automatico (0%) para o Windows NAO religar a Economia de Energia sozinho!
+        Set-TodosDC $SubEnergySaver $SetEsThreshold 0
+        Set-TodosDC $SubEnergySaver $SetEsPolicy    0
+    } else {
+        # Na tomada: mantem 100% no perfil DC para o Windows ligar ES=On automaticamente assim que tirar da tomada!
+        Set-TodosDC $SubEnergySaver $SetEsThreshold 100
+        Set-TodosDC $SubEnergySaver $SetEsPolicy    1
+    }
 
     $planoAC = if ($script:TemDesempenhoMax) { $PlanoDesempenhoMax } else { $PlanoAltoDesempenho }
     [void][Energia]::SetScheme($planoAC)
