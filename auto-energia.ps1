@@ -3,10 +3,13 @@
 # Economia de energia do Windows DESLIGADA -> modo desempenho maximo (110% na tomada)
 # Log: %LOCALAPPDATA%\Energia\auto-energia.log
 
-# Apps fechados ao entrar no modo economia (edite a lista se quiser)
+# Apps fechados ao entrar no modo economia (e na varredura automatica 30s apos o logon)
 $AppsEconomia = 'steam', 'steamwebhelper', 'steamservice', 'EpicGamesLauncher',
                 'EOSOverlayRenderer-Win64-Shipping', 'HWMonitor', 'Discord', 'DiscordSystemHelper',
                 'tailscale-ipn', 'AMDRSServ', 'AMDRSSrcExt'
+
+# Daemons silenciosos que acordam a GTX 1650 sozinhos: mantidos fechados automaticamente na bateria
+$AppsSilenciososGpu = 'AMDRSServ', 'AMDRSSrcExt', 'NVIDIA Overlay', 'nvsphelper64', 'EOSOverlayRenderer-Win64-Shipping'
 
 $logDir = Join-Path $env:LOCALAPPDATA 'Energia'
 New-Item -ItemType Directory -Force $logDir | Out-Null
@@ -314,6 +317,8 @@ if ($modo -eq 'economia') { Modo-Economia 'inicio' } else { Modo-Desempenho 'ini
 $ultimoSmu = [DateTime]::UtcNow
 $ultimoTick = [DateTime]::UtcNow
 $recheckNitroAt = [DateTime]::MinValue
+# Varredura automatica 35s apos o logon: pega Steam/Epic/Discord/AMDRSServ que o Windows abre depois deste script
+$varreduraPosBootAt = if ($modo -eq 'economia') { [DateTime]::UtcNow.AddSeconds(35) } else { [DateTime]::MinValue }
 
 while ($true) {
     try {
@@ -357,6 +362,16 @@ while ($true) {
             $modo = $novo
             $ultimoSmu = $agora
         }
+        # Varredura automatica pos-logon (35s): fecha Steam/Epic/Discord/AMDRSServ que o Windows abriu atrasado
+        elseif ($varreduraPosBootAt -ne [DateTime]::MinValue -and $agora -ge $varreduraPosBootAt) {
+            $varreduraPosBootAt = [DateTime]::MinValue
+            if ($modo -eq 'economia') {
+                Get-Process -Name $AppsEconomia -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+                Set-NvidiaAuxHardware 'dormir'
+                Set-WallpaperEngine 'pause'
+                Log 'varredura pos-boot: apps de inicializacao fechados para liberar GTX 1650 D3'
+            }
+        }
         # Rechecagem anti-NitroSense 6s apos trocar tomada/suspensao (garante que o NitroSense nao desfez o plano)
         elseif ($recheckNitroAt -ne [DateTime]::MinValue -and $agora -ge $recheckNitroAt) {
             $recheckNitroAt = [DateTime]::MinValue
@@ -374,6 +389,11 @@ while ($true) {
                 if (-not (Test-SmuEconomia)) {
                     Log 'teto SMU resetado pelo EC: reaplicando (8W)'
                     Set-RyzenSMU 'economia'
+                }
+                # Mantem daemons silenciosos de overlay/gravacao fora da bateria (sem fechar apps que voce abriu de proposito)
+                Get-Process -Name $AppsSilenciososGpu -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+                if ((Get-Service -Name 'NvContainerLocalSystem' -ErrorAction SilentlyContinue).Status -eq 'Running') {
+                    Set-NvidiaAuxHardware 'dormir'
                 }
             } else {
                 $ativo = [Energia]::GetActiveScheme()
