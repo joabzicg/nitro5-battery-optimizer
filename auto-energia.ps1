@@ -188,9 +188,8 @@ function Set-RyzenSMU([ValidateSet('economia', 'desempenho')][string]$perfil) {
     if (-not (Test-Path $RyzenAdj)) { return }
     try {
         if ($perfil -eq 'economia') {
-            # Ponto doce no SMU do Ryzen 5 4600H (~7.2W STAPM / ~8.1W Fast / ~7.2W APU Slow efetivos + SoC 14A para video 4K liso)
-            # Media real na bateria: ~11-13W (~4h40-5h em 60Wh) | Teto <= 15W sem engasgar!
-            & $RyzenAdj --stapm-limit=8000 --fast-limit=9000 --slow-limit=8000 --apu-slow-limit=8000 --vrm-current=22000 --vrmmax-current=30000 --vrmsoc-current=14000 --vrmsocmax-current=20000 --tctl-temp=68 --power-saving 2>$null | Out-Null
+            # Teto exato <= 15W mesmo em picos de 97-100% CPU (~6.5W STAPM / ~6.8W Fast / ~6.5W APU Slow + SoC 14A para video 4K liso)
+            & $RyzenAdj --stapm-limit=7200 --fast-limit=7600 --slow-limit=7200 --apu-slow-limit=7200 --vrm-current=19000 --vrmmax-current=25000 --vrmsoc-current=14000 --vrmsocmax-current=20000 --tctl-temp=68 --power-saving 2>$null | Out-Null
         } else {
             # Restaura TDP 110% na tomada (compensa escala ~0.9x do BIOS -> 45W STAPM / 54W Fast reais + max-performance)
             & $RyzenAdj --stapm-limit=50000 --fast-limit=60000 --slow-limit=50000 --apu-slow-limit=50000 --vrm-current=65000 --vrmmax-current=95000 --vrmsoc-current=22000 --vrmsocmax-current=32000 --tctl-temp=95 --max-performance 2>$null | Out-Null
@@ -204,7 +203,7 @@ function Set-RyzenSMU([ValidateSet('economia', 'desempenho')][string]$perfil) {
 function Test-SmuEconomia {
     try {
         $info = & $RyzenAdj -i 2>$null | Out-String
-        if ($info -match 'STAPM LIMIT\s*\|\s*([\d.]+)') { return ([double]$Matches[1] -le 9.5) }
+        if ($info -match 'STAPM LIMIT\s*\|\s*([\d.]+)') { return ([double]$Matches[1] -le 8.0) }
     } catch {}
     return $true   # sem leitura: nao mexe (evita escrever no SMU a toa)
 }
@@ -345,7 +344,7 @@ function Modo-Economia($motivo) {
     wsl.exe --shutdown 2>$null | Out-Null
 
     $sw.Stop()
-    Log "ECONOMIA   ($motivo; plano: Equilibrado, SMU: 8W, NV_DRS: $nvDrs, 60 Hz: $hz, modo: $o, $($sw.ElapsedMilliseconds)ms)"
+    Log "ECONOMIA   ($motivo; plano: Equilibrado, SMU: 7.2W, NV_DRS: $nvDrs, 60 Hz: $hz, modo: $o, $($sw.ElapsedMilliseconds)ms)"
 }
 
 function Modo-Desempenho($motivo) {
@@ -456,7 +455,7 @@ while ($true) {
         elseif (($agora - $ultimoSmu).TotalSeconds -ge 60) {
             if ($modo -eq 'economia') {
                 if (-not (Test-SmuEconomia)) {
-                    Log 'teto SMU resetado pelo EC: reaplicando (8W)'
+                    Log 'teto SMU resetado pelo EC: reaplicando (7.2W)'
                     Set-RyzenSMU 'economia'
                 }
                 # Mantem daemons silenciosos de overlay/gravacao fora da bateria (sem fechar apps que voce abriu de proposito)
