@@ -49,6 +49,7 @@ $OverlayEficiencia = [Guid]'961cc777-2547-4f9d-8174-7d86181b8a7a'
 $OverlayDesempenho = [Guid]'ded574b5-45a0-4f42-8737-46345c09c238'
 
 $PlanoEquilibrado    = '381b4222-f694-41f0-9685-ff5bb260df2e'
+$PlanoDesempenhoMax  = '5970e164-64a9-4cc3-84b1-0bd6bf5e7657'
 $PlanoAltoDesempenho = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
 
 # Subgrupos e configuracoes extras (AMD Ryzen 5 4600H + GTX 1650 Optimus)
@@ -81,8 +82,8 @@ function Set-RyzenSMU([ValidateSet('economia', 'desempenho')][string]$perfil) {
             # Media em uso normal: ~11-13W | Pico sob 100% CPU: ~14-14.8W (teto <= 15W sem engasgar!)
             & $RyzenAdj --stapm-limit=8000 --fast-limit=9000 --slow-limit=8000 --apu-slow-limit=8000 --vrm-current=22000 --vrmmax-current=30000 --vrmsoc-current=14000 --vrmsocmax-current=20000 --tctl-temp=68 --power-saving 2>$null | Out-Null
         } else {
-            # Restaura TDP completo na tomada: 45W sustentado / 54W pico / max-performance
-            & $RyzenAdj --stapm-limit=45000 --fast-limit=54000 --slow-limit=45000 --apu-slow-limit=45000 --vrm-current=60000 --vrmmax-current=90000 --vrmsoc-current=20000 --vrmsocmax-current=30000 --tctl-temp=95 --max-performance 2>$null | Out-Null
+            # Restaura TDP 110% na tomada (compensa escala ~0.9x do BIOS -> 45W STAPM / 54W Fast reais + max-performance)
+            & $RyzenAdj --stapm-limit=50000 --fast-limit=60000 --slow-limit=50000 --apu-slow-limit=50000 --vrm-current=65000 --vrmmax-current=95000 --vrmsoc-current=22000 --vrmsocmax-current=32000 --tctl-temp=95 --max-performance 2>$null | Out-Null
         }
     } catch {}
     # Teste isolado (logman, provedores de audio) mostrou 0 glitches por escrita do ryzenadj, entao
@@ -127,7 +128,10 @@ function Set-NvidiaAuxHardware([ValidateSet('dormir', 'acordar')][string]$acao) 
 
 # O NitroSense troca o plano (Equilibrado <-> Alto desempenho) ao ligar/tirar da tomada,
 # entao os valores vao para TODOS os planos, nao so para o ativo.
-function Planos { powercfg /list | Select-String '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | ForEach-Object { $_.Matches[0].Value } }
+function Planos {
+    $list = @(powercfg /list | Select-String '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | ForEach-Object { $_.Matches[0].Value })
+    ($list + @($PlanoEquilibrado, $PlanoDesempenhoMax, $PlanoAltoDesempenho)) | Select-Object -Unique
+}
 # Grava na tomada (AC) e na bateria (DC) de todos os planos: o modo vale nos dois.
 function Set-Todos($sub, $setting, $value) {
     foreach ($p in Planos) {
@@ -212,25 +216,25 @@ function Modo-Economia($motivo) {
 }
 
 function Modo-Desempenho($motivo) {
-    # Restaura hardware NVIDIA auxiliar + TDP completo no SMU
+    # Restaura hardware NVIDIA auxiliar + TDP 110% no SMU
     Set-NvidiaAuxHardware 'acordar'
 
-    # CPU no talo: minimo 100%, turbo agressivo, sem core parking, EPP 0
+    # CPU no talo (110%): minimo 100%, turbo agressivo (4.0 GHz), sem core parking, EPP 0, thresholds instantaneos
     Set-Todos SUB_PROCESSOR PROCTHROTTLEMIN 100
     Set-Todos SUB_PROCESSOR PROCTHROTTLEMAX 100
     Set-Todos SUB_PROCESSOR PERFBOOSTMODE 2
     Set-Todos SUB_PROCESSOR PROCFREQMAX 0
     Set-Todos SUB_PROCESSOR PERFEPP 0
     Set-Todos SUB_PROCESSOR $SetCoreParkMin 100
-    Set-Todos SUB_PROCESSOR $SetPerfIncThresh 30
-    Set-Todos SUB_PROCESSOR $SetPerfDecThresh 10
+    Set-Todos SUB_PROCESSOR $SetPerfIncThresh 10
+    Set-Todos SUB_PROCESSOR $SetPerfDecThresh 5
     Set-Todos SUB_PROCESSOR $SetPerfDecPol 0
 
-    # GPU / Plataforma no maximo (libera GTX 1650 + SMU/PowerPlay em maximo desempenho)
+    # GPU / Plataforma no maximo (libera GTX 1650 + SMU/PowerPlay/Switchable Graphics em maximo desempenho)
     Set-Todos $SubAmdSlider    $SetAmdSlider    3    # 3 = O melhor desempenho
     Set-Todos $SubAmdPowerPlay $SetAmdPowerPlay 1    # 1 = Maximizar desempenho
     Set-Todos $SubGraphics     $SetGpuPref      0    # 0 = Nenhum (libera GTX 1650)
-    Set-Todos $SubSwitchable   $SetSwitchable   2    # 2 = Otimizar desempenho
+    Set-Todos $SubSwitchable   $SetSwitchable   3    # 3 = Maximizar desempenho
     Set-Todos SUB_PCIEXPRESS   ASPM             0    # 0 = Desligado
     Set-Todos $SubJsTimer      $SetJsTimer      1    # 1 = Desempenho maximo
     Set-Todos $SubMultimedia   $SetVideoPlay    0    # 0 = Otimizar qualidade
@@ -244,7 +248,9 @@ function Modo-Desempenho($motivo) {
     Set-TodosDC $SubEnergySaver $SetEsThreshold 100
     Set-TodosDC $SubEnergySaver $SetEsPolicy    1
 
-    powercfg /setactive $PlanoAltoDesempenho 2>$null | Out-Null
+    # Ativa Desempenho Maximo (Ultimate Performance, que o NitroSense nao sobrescreve); fallback para Alto desempenho
+    $planoAC = if ((powercfg /list | Out-String) -match $PlanoDesempenhoMax) { $PlanoDesempenhoMax } else { $PlanoAltoDesempenho }
+    powercfg /setactive $planoAC 2>$null | Out-Null
     powercfg /setactive SCHEME_CURRENT 2>$null | Out-Null
 
     Set-RyzenSMU 'desempenho'
@@ -254,7 +260,7 @@ function Modo-Desempenho($motivo) {
     Set-Brilho 100
     Set-WallpaperEngine 'play'
     Start-Service Tailscale -ErrorAction SilentlyContinue
-    Log "DESEMPENHO ($motivo; plano: Alto desempenho, SMU: 45W, 144 Hz: $hz, modo: $o)"
+    Log "DESEMPENHO ($motivo; plano: Desempenho Maximo, SMU: 50W/60W, 144 Hz: $hz, modo: $o)"
 }
 
 # Regras (vale o ultimo evento):
@@ -299,6 +305,15 @@ while ($true) {
             if (-not (Test-SmuEconomia)) {
                 Log 'teto SMU resetado pelo EC: reaplicando (8W)'
                 Set-RyzenSMU 'economia'
+            }
+            $ultimoSmu = Get-Date
+        }
+        # Na tomada: garante a cada 60s que o NitroSense nao reverteu o plano/boost para modo economia
+        elseif ($modo -eq 'desempenho' -and ((Get-Date) - $ultimoSmu).TotalSeconds -ge 60) {
+            $boostAc = powercfg /qh SCHEME_CURRENT SUB_PROCESSOR PERFBOOSTMODE 2>$null | Select-String 'Correntes Alternadas Atuais:\s+0x([0-9a-f]+)'
+            if ($boostAc -and [Convert]::ToInt32($boostAc.Matches[0].Groups[1].Value, 16) -ne 2) {
+                Log 'NitroSense sobrescreveu plano AC (boost!=2): restaurando Desempenho Maximo'
+                Modo-Desempenho 'auto-heal AC'
             }
             $ultimoSmu = Get-Date
         }
