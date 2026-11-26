@@ -1,0 +1,11 @@
+# Logs, backups e scripts temporarios de diagnostico
+*.log
+*.log.old
+*.backup*.ps1
+vigia/*.log
+vigia/probe.ps1
+vigia/stress.ps1
+vigia/test-reset.ps1
+
+# Binarios de terceiros (baixados automaticamente pelo instalar.ps1 direto do GitHub oficial FlyGoat/RyzenAdj)
+ryzenadj/
