@@ -208,7 +208,7 @@ function Aplicar-PlanoEconomia {
     Set-Todos $SubGraphics     $SetGpuPref      1    # 1 = Baixo consumo de energia (forca iGPU)
     Set-Todos $SubSwitchable   $SetSwitchable   0    # 0 = Forcar graficos redutores de energia
     Set-Todos $SubPciExpress   $SetAspm         2    # 2 = Maxima (se audio estalar, troque para 1 ou 0)
-    Set-Todos $SubJsTimer      $SetJsTimer      0    # 0 = Economia de energia maxima no timer JS
+    Set-Todos $SubJsTimer      $SetJsTimer      1    # 1 = Desempenho maximo (evita engasgo/atraso em paginas web e WebSockets)
     Set-Todos $SubMultimedia   $SetVideoPlay    1    # 1 = Equilibrado (evita engasgos em video 4K)
     Set-Todos $SubDisk         $SetAhciLpm      2    # 2 = HIPM+DIPM
     Set-Todos $SubDisk         $SetNvmeNoppme   1    # 1 = NVMe NOPPME ligado
