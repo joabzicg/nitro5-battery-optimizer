@@ -87,6 +87,8 @@ $SetPerfDecPol      = [Guid]'40fbefc7-2e9d-4d25-a185-0cfd8574bac6'
 
 $SubVideo           = [Guid]'7516b95f-f776-4464-8c53-06167f40cc99'
 $BrilhoPlano        = [Guid]'aded5e82-b909-4619-9949-f5d71dac0bcb'
+$SetVideoIdle       = [Guid]'3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e'
+$SetVideoDim        = [Guid]'17aaa29b-8b43-4b94-aafe-35f64daaf1ee'
 $SubPciExpress      = [Guid]'501a4d13-42af-4429-9fd1-a8218c268e20'
 $SetAspm            = [Guid]'ee12f906-d277-404b-b6da-e5fa1a576df5'
 $SubAmdSlider       = [Guid]'c763b4ec-0e50-4b6b-9bed-2b92a6ee884e'; $SetAmdSlider    = [Guid]'7ec1751b-60ed-4588-afb5-9819d3d77d90'
@@ -214,6 +216,8 @@ function Aplicar-PlanoEconomia {
     Set-Todos $SubDisk         $SetNvme2Idle    100
     Set-Todos $SubDisk         $SetNvme1Lat     50
     Set-Todos $SubDisk         $SetNvme2Lat     50
+    Set-TodosDC $SubVideo       $SetVideoIdle   420  # 7 min para desligar a tela na bateria
+    Set-TodosDC $SubVideo       $SetVideoDim    400  # esmaece 20s antes (6m40s)
     Set-TodosDC $SubEnergySaver $SetEsThreshold 100
     Set-TodosDC $SubEnergySaver $SetEsPolicy    1
 
@@ -245,6 +249,8 @@ function Aplicar-PlanoDesempenho {
     Set-Todos $SubDisk         $SetNvme1Lat     0
     Set-Todos $SubDisk         $SetNvme2Lat     0
     # Mantem ESBATTTHRESHOLD=100 no perfil DC (so vale na bateria!)
+    Set-TodosDC $SubVideo       $SetVideoIdle   420  # 7 min para desligar a tela na bateria
+    Set-TodosDC $SubVideo       $SetVideoDim    400  # esmaece 20s antes (6m40s)
     Set-TodosDC $SubEnergySaver $SetEsThreshold 100
     Set-TodosDC $SubEnergySaver $SetEsPolicy    1
 
