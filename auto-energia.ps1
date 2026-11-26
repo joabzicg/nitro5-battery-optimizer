@@ -142,6 +142,7 @@ $SetBoostMode       = [Guid]'be337238-0d82-4146-a960-4f3749d470c7'
 $SetFreqMax         = [Guid]'75b0ae3f-bce0-45a7-8c89-c9611c25e100'
 $SetEpp             = [Guid]'36687f9e-e3a5-4dbf-b1dc-15eb381c6863'
 $SetCoreParkMin     = [Guid]'0cc5b647-c1df-4637-891a-dec35c318583'
+$SetCoreParkMax     = [Guid]'ea062031-0e34-4ff1-9b6d-eb1059334028'
 $SetPerfIncThresh   = [Guid]'06cadf0e-64ed-448a-8927-ce7bf90eb35d'
 $SetPerfDecThresh   = [Guid]'12a0ab44-fe28-4fa9-b3bd-4b64f44960a6'
 $SetPerfDecPol      = [Guid]'40fbefc7-2e9d-4d25-a185-0cfd8574bac6'
@@ -188,11 +189,13 @@ function Set-RyzenSMU([ValidateSet('economia', 'desempenho')][string]$perfil) {
     if (-not (Test-Path $RyzenAdj)) { return }
     try {
         if ($perfil -eq 'economia') {
-            # Teto exato <= 15W mesmo em picos de 97-100% CPU (~6.5W STAPM / ~6.8W Fast / ~6.5W APU Slow + SoC 14A para video 4K liso)
-            & $RyzenAdj --stapm-limit=7200 --fast-limit=7600 --slow-limit=7200 --apu-slow-limit=7200 --vrm-current=19000 --vrmmax-current=25000 --vrmsoc-current=14000 --vrmsocmax-current=20000 --tctl-temp=68 --power-saving 2>$null | Out-Null
+            # Sweet spot <= 17W pico / ~10-13W media (~4h30-5h) mantendo 2.2-3.0 GHz ageis!
+            # --max-performance baixa CCLK Boost SETPOINT de 95% -> 50% (acaba com sensacao de Atom em 1.38 GHz),
+            # enquanto o teto 9000/10000 (~8.1W STAPM / ~9.0W Fast reais) + 4 nucleos ativos (67%) segura <= 17W!
+            & $RyzenAdj --stapm-limit=9000 --fast-limit=10000 --slow-limit=9000 --apu-slow-limit=9000 --vrm-current=24000 --vrmmax-current=32000 --vrmsoc-current=15000 --vrmsocmax-current=22000 --tctl-temp=72 --max-performance 2>$null | Out-Null
         } else {
-            # Restaura TDP 110% na tomada (compensa escala ~0.9x do BIOS -> ~49.5W STAPM / ~58.5W Fast reais + max-performance, protecao termica 95C)
-            & $RyzenAdj --stapm-limit=55000 --fast-limit=65000 --slow-limit=55000 --apu-slow-limit=55000 --vrm-current=70000 --vrmmax-current=100000 --vrmsoc-current=25000 --vrmsocmax-current=35000 --tctl-temp=95 --max-performance 2>$null | Out-Null
+            # Tomada "Forte & Controlado": ~96% da performance (3.8-4.0 GHz em jogos/build) sem virar forno (teto 85C)
+            & $RyzenAdj --stapm-limit=42000 --fast-limit=50000 --slow-limit=42000 --apu-slow-limit=42000 --vrm-current=65000 --vrmmax-current=95000 --vrmsoc-current=25000 --vrmsocmax-current=35000 --tctl-temp=85 --max-performance 2>$null | Out-Null
         }
     } catch {}
     # Teste isolado (logman, provedores de audio) mostrou 0 glitches por escrita do ryzenadj, entao
@@ -203,16 +206,16 @@ function Set-RyzenSMU([ValidateSet('economia', 'desempenho')][string]$perfil) {
 function Test-SmuEconomia {
     try {
         $info = & $RyzenAdj -i 2>$null | Out-String
-        if ($info -match 'STAPM LIMIT\s*\|\s*([\d.]+)') { return ([double]$Matches[1] -le 8.0) }
+        if ($info -match 'STAPM LIMIT\s*\|\s*([\d.]+)') { return ([double]$Matches[1] -le 10.5) }
     } catch {}
     return $true   # sem leitura: nao mexe (evita escrever no SMU a toa)
 }
 
-# Le o STAPM atual do SMU na tomada; $true se ainda esta >= 44W (EC do NitroSense nao derrubou pra 35W).
+# Le o STAPM atual do SMU na tomada; $true se ainda esta >= 36W (EC do NitroSense nao derrubou pra economia/35W).
 function Test-SmuDesempenho {
     try {
         $info = & $RyzenAdj -i 2>$null | Out-String
-        if ($info -match 'STAPM LIMIT\s*\|\s*([\d.]+)') { return ([double]$Matches[1] -ge 44.0) }
+        if ($info -match 'STAPM LIMIT\s*\|\s*([\d.]+)') { return ([double]$Matches[1] -ge 36.0) }
     } catch {}
     return $true
 }
@@ -266,10 +269,11 @@ function Aplicar-PlanoEconomia {
     Set-Todos $SubProcessor $SetProcMax $maxCpu
     Set-Todos $SubProcessor $SetBoostMode 0
     Set-Todos $SubProcessor $SetFreqMax 0
-    Set-Todos $SubProcessor $SetEpp 75
+    Set-Todos $SubProcessor $SetEpp 35
     Set-Todos $SubProcessor $SetCoreParkMin 0
-    Set-Todos $SubProcessor $SetPerfIncThresh 65
-    Set-Todos $SubProcessor $SetPerfDecThresh 25
+    Set-Todos $SubProcessor $SetCoreParkMax 67   # 4 nucleos / 8 threads ativos -> concentra 8-9W em 2.2-3.0 GHz ageis!
+    Set-Todos $SubProcessor $SetPerfIncThresh 45
+    Set-Todos $SubProcessor $SetPerfDecThresh 20
     Set-Todos $SubProcessor $SetPerfDecPol 1
 
     Set-Todos $SubAmdSlider    $SetAmdSlider    0    # 0 = Economia de bateria
@@ -294,14 +298,15 @@ function Aplicar-PlanoEconomia {
 }
 
 function Aplicar-PlanoDesempenho([switch]$NaBateria) {
-    Set-Todos $SubProcessor $SetProcMin 100
+    Set-Todos $SubProcessor $SetProcMin 5       # Descansa em 1.4 GHz no idle (esfria -15C!), mas sobe instantaneo p/ 3.9-4.0 GHz sob carga!
     Set-Todos $SubProcessor $SetProcMax 100
     Set-Todos $SubProcessor $SetBoostMode 2
     Set-Todos $SubProcessor $SetFreqMax 0
-    Set-Todos $SubProcessor $SetEpp 0
+    Set-Todos $SubProcessor $SetEpp 10
     Set-Todos $SubProcessor $SetCoreParkMin 100
-    Set-Todos $SubProcessor $SetPerfIncThresh 10
-    Set-Todos $SubProcessor $SetPerfDecThresh 5
+    Set-Todos $SubProcessor $SetCoreParkMax 100  # Libera todos os 6 nucleos / 12 threads
+    Set-Todos $SubProcessor $SetPerfIncThresh 15
+    Set-Todos $SubProcessor $SetPerfDecThresh 8
     Set-Todos $SubProcessor $SetPerfDecPol 0
 
     Set-Todos $SubAmdSlider    $SetAmdSlider    3    # 3 = O melhor desempenho
@@ -353,7 +358,7 @@ function Modo-Economia($motivo) {
     wsl.exe --shutdown 2>$null | Out-Null
 
     $sw.Stop()
-    Log "ECONOMIA   ($motivo; plano: Equilibrado, SMU: 7.2W, NV_DRS: $nvDrs, 60 Hz: $hz, modo: $o, $($sw.ElapsedMilliseconds)ms)"
+    Log "ECONOMIA   ($motivo; plano: Equilibrado, SMU: 9W/10W 4c, NV_DRS: $nvDrs, 60 Hz: $hz, modo: $o, $($sw.ElapsedMilliseconds)ms)"
 }
 
 function Modo-Desempenho($motivo) {
@@ -374,7 +379,7 @@ function Modo-Desempenho($motivo) {
 
     $sw.Stop()
     $tag = if ($naBat) { 'BATERIA TURBO' } else { 'TOMADA' }
-    Log "DESEMPENHO ($motivo [$tag]; plano: Desempenho Maximo, SMU: 55W/65W, NV_DRS: $nvDrs, 144 Hz: $hz, modo: $o, $($sw.ElapsedMilliseconds)ms)"
+    Log "DESEMPENHO ($motivo [$tag]; plano: Desempenho Maximo, SMU: 42W/50W 85C, NV_DRS: $nvDrs, 144 Hz: $hz, modo: $o, $($sw.ElapsedMilliseconds)ms)"
 }
 
 # Regras (vale o ultimo evento):
@@ -464,7 +469,7 @@ while ($true) {
         elseif (($agora - $ultimoSmu).TotalSeconds -ge 60) {
             if ($modo -eq 'economia') {
                 if (-not (Test-SmuEconomia)) {
-                    Log 'teto SMU resetado pelo EC: reaplicando (7.2W)'
+                    Log 'teto SMU resetado pelo EC: reaplicando (9W/10W)'
                     Set-RyzenSMU 'economia'
                 }
                 # Mantem daemons silenciosos de overlay/gravacao fora da bateria (sem fechar apps que voce abriu de proposito)
@@ -481,7 +486,7 @@ while ($true) {
                     Aplicar-PlanoDesempenho -NaBateria:$naBat
                 }
                 if (-not (Test-SmuDesempenho)) {
-                    Log 'EC do NitroSense derrubou STAPM na tomada (<44W): reaplicando 55W/65W'
+                    Log 'EC do NitroSense derrubou STAPM na tomada (<36W): reaplicando 42W/50W 85C'
                     Set-RyzenSMU 'desempenho'
                 }
             }
