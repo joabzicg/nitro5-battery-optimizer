@@ -1,4 +1,4 @@
-$outLog = Join-Path $env:LOCALAPPDATA 'Energia\hardware-verify.log'
+﻿$outLog = Join-Path $env:LOCALAPPDATA 'Energia\hardware-verify.log'
 New-Item -ItemType Directory -Force (Split-Path $outLog) | Out-Null
 "=== INICIO $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ===" | Out-File -Encoding utf8 $outLog
 
@@ -7,7 +7,31 @@ Stop-ScheduledTask -TaskName 'Energia Automatica' -ErrorAction SilentlyContinue
 Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'auto-energia\.ps1' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Milliseconds 500
 Start-ScheduledTask -TaskName 'Energia Automatica'
-Start-Sleep -Seconds 5
+Start-Sleep -Seconds 3
+
+# 1b. Otimiza rede (Cloudflare DoH 17ms no Chrome/Edge com fallback automatico + Roaming Wi-Fi AX200 em Medio)
+"=== REDE (DoH + WI-FI ROAMING) ===" | Out-File -Append -Encoding utf8 $outLog
+try {
+    foreach ($path in @('HKLM:\SOFTWARE\Policies\Google\Chrome', 'HKLM:\SOFTWARE\Policies\Microsoft\Edge')) {
+        New-Item -Path $path -Force | Out-Null
+        Set-ItemProperty -Path $path -Name 'DnsOverHttpsMode' -Value 'automatic' -Type String
+        Set-ItemProperty -Path $path -Name 'DnsOverHttpsTemplates' -Value 'https://cloudflare-dns.com/dns-query' -Type String
+    }
+    "DoH Cloudflare (automatic): OK (Chrome + Edge)" | Out-File -Append -Encoding utf8 $outLog
+} catch {
+    "DoH err: $_" | Out-File -Append -Encoding utf8 $outLog
+}
+try {
+    $curRoam = (Get-NetAdapterAdvancedProperty -Name 'Wi-Fi' -RegistryKeyword 'RoamAggressiveness' -EA SilentlyContinue).DisplayValue
+    if ($curRoam -ne '3. Média') {
+        Set-NetAdapterAdvancedProperty -Name 'Wi-Fi' -RegistryKeyword 'RoamAggressiveness' -DisplayValue '3. Média' -ErrorAction Stop
+        "Wi-Fi RoamAggressiveness: $curRoam -> 3. Média (OK)" | Out-File -Append -Encoding utf8 $outLog
+    } else {
+        "Wi-Fi RoamAggressiveness: ja estava em 3. Média" | Out-File -Append -Encoding utf8 $outLog
+    }
+} catch {
+    "Wi-Fi Roaming err: $_" | Out-File -Append -Encoding utf8 $outLog
+}
 
 # 2. Aplica RyzenAdj diretamente e captura --info (ponto doce 8W/9W + SoC 14A -> fluido em 4K e <=15W total)
 $ra = Join-Path $PSScriptRoot 'ryzenadj\ryzenadj.exe'
