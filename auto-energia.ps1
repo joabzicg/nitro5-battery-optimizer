@@ -41,6 +41,59 @@ public class Energia {
   [DllImport("powrprof.dll")] static extern uint PowerSetActiveScheme(IntPtr root, ref Guid scheme);
   [DllImport("powrprof.dll")] static extern uint PowerGetActiveScheme(IntPtr root, out IntPtr activeGuid);
   [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr hMem);
+  [DllImport("nvapi64.dll", EntryPoint = "nvapi_QueryInterface", CallingConvention = CallingConvention.Cdecl)] static extern IntPtr NvQuery(uint id);
+  [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int NvInit();
+  [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int NvUnload();
+  [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int NvCreateSess(out IntPtr hS);
+  [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int NvDestroySess(IntPtr hS);
+  [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int NvLoad(IntPtr hS);
+  [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int NvSave(IntPtr hS);
+  [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int NvGetBase(IntPtr hS, out IntPtr hP);
+  [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int NvSetSet(IntPtr hS, IntPtr hP, byte[] s);
+  [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int NvDelSet(IntPtr hS, IntPtr hP, uint id);
+
+  static T NvGet<T>(uint id) where T : class {
+    IntPtr p = NvQuery(id);
+    return p == IntPtr.Zero ? null : Marshal.GetDelegateForFunctionPointer<T>(p);
+  }
+  static byte[] NvMakeDword(uint id, uint val) {
+    const int SZ = 12320;
+    byte[] b = new byte[SZ];
+    BitConverter.GetBytes(0x00010000u | (uint)SZ).CopyTo(b, 0);
+    BitConverter.GetBytes(id).CopyTo(b, 4100);
+    BitConverter.GetBytes(0u).CopyTo(b, 4104);
+    BitConverter.GetBytes(val).CopyTo(b, 8220);
+    return b;
+  }
+  // Alterna o Perfil Global do Painel NVIDIA via nvapi64.dll DRS (nao acorda a GTX 1650!):
+  //   integratedOnly=true  -> "Graficos integrados" (nenhum app novo/antigo acorda a GTX 1650 na bateria)
+  //   integratedOnly=false -> "Selecao automatica"  (restaura 100% dos jogos na GTX 1650 na tomada)
+  public static int SetNvidiaGlobalGpu(bool integratedOnly) {
+    try {
+      var init = NvGet<NvInit>(0x0150E828); var unload = NvGet<NvUnload>(0xD22BDD7E);
+      var create = NvGet<NvCreateSess>(0x0694D52E); var destroy = NvGet<NvDestroySess>(0xDAD9CFF8);
+      var load = NvGet<NvLoad>(0x375DBD6B); var save = NvGet<NvSave>(0xFCBC7E14);
+      var getBase = NvGet<NvGetBase>(0xDA8466A0);
+      var setSet = NvGet<NvSetSet>(0x577DD202); var delSet = NvGet<NvDelSet>(0xE4A26362);
+      if (init == null || create == null || load == null || save == null || getBase == null) return -999;
+      int st = init(); if (st != 0) return st;
+      IntPtr hS; st = create(out hS); if (st != 0) { unload(); return st; }
+      try {
+        st = load(hS); if (st != 0) return st;
+        IntPtr hP; st = getBase(hS, out hP); if (st != 0) return st;
+        if (integratedOnly) {
+          setSet(hS, hP, NvMakeDword(0x10F9DC80u, 0u)); // SHIM_MCCOMPAT_INTEGRATED
+          setSet(hS, hP, NvMakeDword(0x10F9DC81u, 0u)); // SHIM_RENDERING_MODE_INTEGRATED
+          setSet(hS, hP, NvMakeDword(0x10F9DC84u, 0u)); // SHIM_RENDERING_OPTIONS_DEFAULT
+        } else {
+          delSet(hS, hP, 0x10F9DC80u);
+          delSet(hS, hP, 0x10F9DC81u);
+          delSet(hS, hP, 0x10F9DC84u);
+        }
+        return save(hS);
+      } finally { destroy(hS); unload(); }
+    } catch { return -998; }
+  }
 
   public static uint SetModo(Guid g) { return PowerSetUserConfiguredACPowerMode(ref g) | PowerSetUserConfiguredDCPowerMode(ref g); }
   public static uint WriteAC(Guid scheme, Guid sub, Guid setting, uint val) { return PowerWriteACValueIndex(IntPtr.Zero, ref scheme, ref sub, ref setting, val); }
@@ -263,9 +316,10 @@ function Aplicar-PlanoDesempenho {
 
 function Modo-Economia($motivo) {
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    # FASE INSTANTANEA (< 0.2s): plano nativo + SMU + 60 Hz + overlay + brilho -> efeito imediato!
+    # FASE INSTANTANEA (< 0.2s): plano nativo + SMU + NVIDIA Global iGPU + 60 Hz + overlay + brilho -> efeito imediato!
     Aplicar-PlanoEconomia
     Set-RyzenSMU 'economia'
+    $nvDrs = [Energia]::SetNvidiaGlobalGpu($true)
     $o = [Energia]::SetModo($OverlayEficiencia)
     $hz = [Energia]::SetHz(60)
     Set-Brilho 20 -SomenteReduzir
@@ -279,14 +333,15 @@ function Modo-Economia($motivo) {
     wsl.exe --shutdown 2>$null | Out-Null
 
     $sw.Stop()
-    Log "ECONOMIA   ($motivo; plano: Equilibrado, SMU: 8W, 60 Hz: $hz, modo: $o, $($sw.ElapsedMilliseconds)ms)"
+    Log "ECONOMIA   ($motivo; plano: Equilibrado, SMU: 8W, NV_DRS: $nvDrs, 60 Hz: $hz, modo: $o, $($sw.ElapsedMilliseconds)ms)"
 }
 
 function Modo-Desempenho($motivo) {
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    # FASE INSTANTANEA (< 0.2s): plano Ultimate Performance + SMU 50W/60W + 144 Hz + overlay + brilho!
+    # FASE INSTANTANEA (< 0.2s): plano Ultimate Performance + SMU 50W/60W + NVIDIA Global Auto + 144 Hz + overlay + brilho!
     Aplicar-PlanoDesempenho
     Set-RyzenSMU 'desempenho'
+    $nvDrs = [Energia]::SetNvidiaGlobalGpu($false)
     $o = [Energia]::SetModo($OverlayDesempenho)
     $hz = [Energia]::SetHz(144)
     Set-Brilho 100
@@ -297,7 +352,7 @@ function Modo-Desempenho($motivo) {
     Start-Service Tailscale -ErrorAction SilentlyContinue
 
     $sw.Stop()
-    Log "DESEMPENHO ($motivo; plano: Desempenho Maximo, SMU: 50W/60W, 144 Hz: $hz, modo: $o, $($sw.ElapsedMilliseconds)ms)"
+    Log "DESEMPENHO ($motivo; plano: Desempenho Maximo, SMU: 50W/60W, NV_DRS: $nvDrs, 144 Hz: $hz, modo: $o, $($sw.ElapsedMilliseconds)ms)"
 }
 
 # Regras (vale o ultimo evento):
