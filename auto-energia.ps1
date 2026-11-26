@@ -38,6 +38,7 @@ public class Energia {
   [DllImport("powrprof.dll")] static extern uint PowerWriteACValueIndex(IntPtr root, ref Guid scheme, ref Guid sub, ref Guid setting, uint val);
   [DllImport("powrprof.dll")] static extern uint PowerWriteDCValueIndex(IntPtr root, ref Guid scheme, ref Guid sub, ref Guid setting, uint val);
   [DllImport("powrprof.dll")] static extern uint PowerReadACValueIndex(IntPtr root, ref Guid scheme, ref Guid sub, ref Guid setting, out uint val);
+  [DllImport("powrprof.dll")] static extern uint PowerReadDCValueIndex(IntPtr root, ref Guid scheme, ref Guid sub, ref Guid setting, out uint val);
   [DllImport("powrprof.dll")] static extern uint PowerSetActiveScheme(IntPtr root, ref Guid scheme);
   [DllImport("powrprof.dll")] static extern uint PowerGetActiveScheme(IntPtr root, out IntPtr activeGuid);
   [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr hMem);
@@ -109,6 +110,10 @@ public class Energia {
   public static int ReadAC(Guid scheme, Guid sub, Guid setting) {
     uint v;
     return PowerReadACValueIndex(IntPtr.Zero, ref scheme, ref sub, ref setting, out v) == 0 ? (int)v : -1;
+  }
+  public static int ReadDC(Guid scheme, Guid sub, Guid setting) {
+    uint v;
+    return PowerReadDCValueIndex(IntPtr.Zero, ref scheme, ref sub, ref setting, out v) == 0 ? (int)v : -1;
   }
   public static int SetHz(int hz) {
     DEVMODE dm = new DEVMODE();
@@ -338,13 +343,14 @@ function Modo-Economia($motivo) {
 
 function Modo-Desempenho($motivo) {
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    # FASE INSTANTANEA (< 0.2s): plano Ultimate Performance + SMU 50W/60W + NVIDIA Global Auto + 144 Hz + overlay + brilho!
-    Aplicar-PlanoDesempenho
+    $naBat = ([Windows.System.Power.PowerManager]::PowerSupplyStatus -eq 'NotPresent')
+    # FASE INSTANTANEA (< 0.2s): plano Ultimate Performance + SMU 50W/60W + NVIDIA Global Auto + 144 Hz + overlay!
+    Aplicar-PlanoDesempenho -NaBateria:$naBat
     Set-RyzenSMU 'desempenho'
     $nvDrs = [Energia]::SetNvidiaGlobalGpu($false)
     $o = [Energia]::SetModo($OverlayDesempenho)
     $hz = [Energia]::SetHz(144)
-    Set-Brilho 100
+    if (-not $naBat) { Set-Brilho 100 }
 
     # FASE HARDWARE / BACKGROUND
     Set-NvidiaAuxHardware 'acordar'
@@ -352,7 +358,8 @@ function Modo-Desempenho($motivo) {
     Start-Service Tailscale -ErrorAction SilentlyContinue
 
     $sw.Stop()
-    Log "DESEMPENHO ($motivo; plano: Desempenho Maximo, SMU: 50W/60W, NV_DRS: $nvDrs, 144 Hz: $hz, modo: $o, $($sw.ElapsedMilliseconds)ms)"
+    $tag = if ($naBat) { 'BATERIA TURBO' } else { 'TOMADA' }
+    Log "DESEMPENHO ($motivo [$tag]; plano: Desempenho Maximo, SMU: 50W/60W, NV_DRS: $nvDrs, 144 Hz: $hz, modo: $o, $($sw.ElapsedMilliseconds)ms)"
 }
 
 # Regras (vale o ultimo evento):
@@ -434,11 +441,11 @@ while ($true) {
                 Aplicar-PlanoEconomia
                 if (-not (Test-SmuEconomia)) { Set-RyzenSMU 'economia' }
             } else {
-                Aplicar-PlanoDesempenho
+                Aplicar-PlanoDesempenho -NaBateria:($fonte -eq 'NotPresent')
                 Set-RyzenSMU 'desempenho'
             }
         }
-        # A cada 60s: leitura leve para garantir que EC/NitroSense nao resetou SMU (economia) nem boost (tomada)
+        # A cada 60s: leitura leve para garantir que EC/NitroSense nao resetou SMU (economia) nem boost (desempenho)
         elseif (($agora - $ultimoSmu).TotalSeconds -ge 60) {
             if ($modo -eq 'economia') {
                 if (-not (Test-SmuEconomia)) {
@@ -452,9 +459,11 @@ while ($true) {
                 }
             } else {
                 $ativo = [Energia]::GetActiveScheme()
-                if ($ativo -ne [Guid]::Empty -and [Energia]::ReadAC($ativo, $SubProcessor, $SetBoostMode) -ne 2) {
-                    Log 'NitroSense sobrescreveu plano AC (boost!=2): restaurando Desempenho Maximo'
-                    Aplicar-PlanoDesempenho
+                $naBat = ($fonte -eq 'NotPresent')
+                $boostVal = if ($naBat) { [Energia]::ReadDC($ativo, $SubProcessor, $SetBoostMode) } else { [Energia]::ReadAC($ativo, $SubProcessor, $SetBoostMode) }
+                if ($ativo -ne [Guid]::Empty -and $boostVal -ne 2) {
+                    Log 'NitroSense sobrescreveu plano Desempenho (boost!=2): restaurando Desempenho Maximo'
+                    Aplicar-PlanoDesempenho -NaBateria:$naBat
                 }
             }
             $ultimoSmu = $agora
