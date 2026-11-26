@@ -191,8 +191,8 @@ function Set-RyzenSMU([ValidateSet('economia', 'desempenho')][string]$perfil) {
             # Teto exato <= 15W mesmo em picos de 97-100% CPU (~6.5W STAPM / ~6.8W Fast / ~6.5W APU Slow + SoC 14A para video 4K liso)
             & $RyzenAdj --stapm-limit=7200 --fast-limit=7600 --slow-limit=7200 --apu-slow-limit=7200 --vrm-current=19000 --vrmmax-current=25000 --vrmsoc-current=14000 --vrmsocmax-current=20000 --tctl-temp=68 --power-saving 2>$null | Out-Null
         } else {
-            # Restaura TDP 110% na tomada (compensa escala ~0.9x do BIOS -> 45W STAPM / 54W Fast reais + max-performance)
-            & $RyzenAdj --stapm-limit=50000 --fast-limit=60000 --slow-limit=50000 --apu-slow-limit=50000 --vrm-current=65000 --vrmmax-current=95000 --vrmsoc-current=22000 --vrmsocmax-current=32000 --tctl-temp=95 --max-performance 2>$null | Out-Null
+            # Restaura TDP 110% na tomada (compensa escala ~0.9x do BIOS -> ~49.5W STAPM / ~58.5W Fast reais + max-performance, protecao termica 95C)
+            & $RyzenAdj --stapm-limit=55000 --fast-limit=65000 --slow-limit=55000 --apu-slow-limit=55000 --vrm-current=70000 --vrmmax-current=100000 --vrmsoc-current=25000 --vrmsocmax-current=35000 --tctl-temp=95 --max-performance 2>$null | Out-Null
         }
     } catch {}
     # Teste isolado (logman, provedores de audio) mostrou 0 glitches por escrita do ryzenadj, entao
@@ -206,6 +206,15 @@ function Test-SmuEconomia {
         if ($info -match 'STAPM LIMIT\s*\|\s*([\d.]+)') { return ([double]$Matches[1] -le 8.0) }
     } catch {}
     return $true   # sem leitura: nao mexe (evita escrever no SMU a toa)
+}
+
+# Le o STAPM atual do SMU na tomada; $true se ainda esta >= 44W (EC do NitroSense nao derrubou pra 35W).
+function Test-SmuDesempenho {
+    try {
+        $info = & $RyzenAdj -i 2>$null | Out-String
+        if ($info -match 'STAPM LIMIT\s*\|\s*([\d.]+)') { return ([double]$Matches[1] -ge 44.0) }
+    } catch {}
+    return $true
 }
 
 function Set-NvidiaAuxHardware([ValidateSet('dormir', 'acordar')][string]$acao) {
@@ -365,7 +374,7 @@ function Modo-Desempenho($motivo) {
 
     $sw.Stop()
     $tag = if ($naBat) { 'BATERIA TURBO' } else { 'TOMADA' }
-    Log "DESEMPENHO ($motivo [$tag]; plano: Desempenho Maximo, SMU: 50W/60W, NV_DRS: $nvDrs, 144 Hz: $hz, modo: $o, $($sw.ElapsedMilliseconds)ms)"
+    Log "DESEMPENHO ($motivo [$tag]; plano: Desempenho Maximo, SMU: 55W/65W, NV_DRS: $nvDrs, 144 Hz: $hz, modo: $o, $($sw.ElapsedMilliseconds)ms)"
 }
 
 # Regras (vale o ultimo evento):
@@ -470,6 +479,10 @@ while ($true) {
                 if ($ativo -ne [Guid]::Empty -and $boostVal -ne 2) {
                     Log 'NitroSense sobrescreveu plano Desempenho (boost!=2): restaurando Desempenho Maximo'
                     Aplicar-PlanoDesempenho -NaBateria:$naBat
+                }
+                if (-not (Test-SmuDesempenho)) {
+                    Log 'EC do NitroSense derrubou STAPM na tomada (<44W): reaplicando 55W/65W'
+                    Set-RyzenSMU 'desempenho'
                 }
             }
             $ultimoSmu = $agora

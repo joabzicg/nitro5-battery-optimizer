@@ -33,10 +33,15 @@ try {
     "Wi-Fi Roaming err: $_" | Out-File -Append -Encoding utf8 $outLog
 }
 
-# 2. Aplica RyzenAdj diretamente e captura --info (teto <=15W mesmo em pico: 7.2W/7.6W + SoC 14A para 4K liso)
+# 2. Aplica RyzenAdj conforme a fonte (AC = 55W/65W 110% | Bateria = 7.2W/7.6W <=15W) e captura --info
 $ra = Join-Path $PSScriptRoot 'ryzenadj\ryzenadj.exe'
-"=== RYZENADJ APPLY ===" | Out-File -Append -Encoding utf8 $outLog
-& $ra --stapm-limit=7200 --fast-limit=7600 --slow-limit=7200 --apu-slow-limit=7200 --vrm-current=19000 --vrmmax-current=25000 --vrmsoc-current=14000 --vrmsocmax-current=20000 --tctl-temp=68 --power-saving 2>&1 | Out-File -Append -Encoding utf8 $outLog
+$naTomada = (Get-CimInstance -Namespace root\wmi -ClassName BatteryStatus -EA SilentlyContinue).PowerOnline
+"=== RYZENADJ APPLY (PowerOnline=$naTomada) ===" | Out-File -Append -Encoding utf8 $outLog
+if ($naTomada) {
+    & $ra --stapm-limit=55000 --fast-limit=65000 --slow-limit=55000 --apu-slow-limit=55000 --vrm-current=70000 --vrmmax-current=100000 --vrmsoc-current=25000 --vrmsocmax-current=35000 --tctl-temp=95 --max-performance 2>&1 | Out-File -Append -Encoding utf8 $outLog
+} else {
+    & $ra --stapm-limit=7200 --fast-limit=7600 --slow-limit=7200 --apu-slow-limit=7200 --vrm-current=19000 --vrmmax-current=25000 --vrmsoc-current=14000 --vrmsocmax-current=20000 --tctl-temp=68 --power-saving 2>&1 | Out-File -Append -Encoding utf8 $outLog
+}
 Start-Sleep -Seconds 2
 "=== RYZENADJ --INFO ===" | Out-File -Append -Encoding utf8 $outLog
 & $ra --info 2>&1 | Out-File -Append -Encoding utf8 $outLog
