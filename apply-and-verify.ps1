@@ -38,7 +38,7 @@ $ra = Join-Path $PSScriptRoot 'ryzenadj\ryzenadj.exe'
 $naTomada = (Get-CimInstance -Namespace root\wmi -ClassName BatteryStatus -EA SilentlyContinue).PowerOnline
 "=== RYZENADJ APPLY (PowerOnline=$naTomada) ===" | Out-File -Append -Encoding utf8 $outLog
 if ($naTomada) {
-    & $ra --stapm-limit=42000 --fast-limit=50000 --slow-limit=42000 --apu-slow-limit=42000 --vrm-current=65000 --vrmmax-current=95000 --vrmsoc-current=25000 --vrmsocmax-current=35000 --tctl-temp=85 --max-performance 2>&1 | Out-File -Append -Encoding utf8 $outLog
+    & $ra --stapm-limit=48000 --fast-limit=56000 --slow-limit=48000 --apu-slow-limit=48000 --vrm-current=68000 --vrmmax-current=98000 --vrmsoc-current=25000 --vrmsocmax-current=35000 --tctl-temp=90 --max-performance 2>&1 | Out-File -Append -Encoding utf8 $outLog
 } else {
     & $ra --stapm-limit=9000 --fast-limit=10000 --slow-limit=9000 --apu-slow-limit=9000 --vrm-current=24000 --vrmmax-current=32000 --vrmsoc-current=15000 --vrmsocmax-current=22000 --tctl-temp=72 --max-performance 2>&1 | Out-File -Append -Encoding utf8 $outLog
 }

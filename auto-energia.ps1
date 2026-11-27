@@ -194,8 +194,8 @@ function Set-RyzenSMU([ValidateSet('economia', 'desempenho')][string]$perfil) {
             # enquanto o teto 9000/10000 (~8.1W STAPM / ~9.0W Fast reais) + 4 nucleos ativos (67%) segura <= 17W!
             & $RyzenAdj --stapm-limit=9000 --fast-limit=10000 --slow-limit=9000 --apu-slow-limit=9000 --vrm-current=24000 --vrmmax-current=32000 --vrmsoc-current=15000 --vrmsocmax-current=22000 --tctl-temp=72 --max-performance 2>$null | Out-Null
         } else {
-            # Tomada "Forte & Controlado": ~96% da performance (3.8-4.0 GHz em jogos/build) sem virar forno (teto 85C)
-            & $RyzenAdj --stapm-limit=42000 --fast-limit=50000 --slow-limit=42000 --apu-slow-limit=42000 --vrm-current=65000 --vrmmax-current=95000 --vrmsoc-current=25000 --vrmsocmax-current=35000 --tctl-temp=85 --max-performance 2>$null | Out-Null
+            # Tomada "Forte & Controlado": segura 3.90-3.95 GHz cheios (48W STAPM / 56W Fast + teto seguro 90C)
+            & $RyzenAdj --stapm-limit=48000 --fast-limit=56000 --slow-limit=48000 --apu-slow-limit=48000 --vrm-current=68000 --vrmmax-current=98000 --vrmsoc-current=25000 --vrmsocmax-current=35000 --tctl-temp=90 --max-performance 2>$null | Out-Null
         }
     } catch {}
     # Teste isolado (logman, provedores de audio) mostrou 0 glitches por escrita do ryzenadj, entao
@@ -211,11 +211,11 @@ function Test-SmuEconomia {
     return $true   # sem leitura: nao mexe (evita escrever no SMU a toa)
 }
 
-# Le o STAPM atual do SMU na tomada; $true se ainda esta >= 36W (EC do NitroSense nao derrubou pra economia/35W).
+# Le o STAPM atual do SMU na tomada; $true se ainda esta >= 42W (EC do NitroSense nao derrubou pra economia/35W).
 function Test-SmuDesempenho {
     try {
         $info = & $RyzenAdj -i 2>$null | Out-String
-        if ($info -match 'STAPM LIMIT\s*\|\s*([\d.]+)') { return ([double]$Matches[1] -ge 36.0) }
+        if ($info -match 'STAPM LIMIT\s*\|\s*([\d.]+)') { return ([double]$Matches[1] -ge 42.0) }
     } catch {}
     return $true
 }
@@ -372,14 +372,14 @@ function Modo-Desempenho($motivo) {
     $hz = [Energia]::SetHz(144)
     if (-not $naBat) { Set-Brilho 100 }
 
-    # FASE HARDWARE / BACKGROUND
+    # FASE HARDWARE / BACKGROUND (Tailscale sem bloquear 30s apos suspensao!)
     Set-NvidiaAuxHardware 'acordar'
     Set-WallpaperEngine 'play'
-    Start-Service Tailscale -ErrorAction SilentlyContinue
+    Start-Process -FilePath 'sc.exe' -ArgumentList 'start Tailscale' -WindowStyle Hidden -ErrorAction SilentlyContinue
 
     $sw.Stop()
     $tag = if ($naBat) { 'BATERIA TURBO' } else { 'TOMADA' }
-    Log "DESEMPENHO ($motivo [$tag]; plano: Desempenho Maximo, SMU: 42W/50W 85C, NV_DRS: $nvDrs, 144 Hz: $hz, modo: $o, $($sw.ElapsedMilliseconds)ms)"
+    Log "DESEMPENHO ($motivo [$tag]; plano: Desempenho Maximo, SMU: 48W/56W 90C, NV_DRS: $nvDrs, 144 Hz: $hz, modo: $o, $($sw.ElapsedMilliseconds)ms)"
 }
 
 # Regras (vale o ultimo evento):
@@ -420,8 +420,9 @@ while ($true) {
             Log "acordou da suspensao (gap=$([math]::Round($gapSec))s, fonte=$fonte) -> aplicando $esperado"
             if ($esperado -eq 'economia') { Modo-Economia 'retorno suspensao' } else { Modo-Desempenho 'retorno suspensao' }
             $modo = $esperado
-            $ultimoSmu = $agora
-            $recheckNitroAt = $agora.AddSeconds(6)
+            $ultimoTick = [DateTime]::UtcNow
+            $ultimoSmu = $ultimoTick
+            $recheckNitroAt = $ultimoTick.AddSeconds(6)
             Start-Sleep -Milliseconds 500
             continue
         }
@@ -442,7 +443,8 @@ while ($true) {
         if ($novo -and $novo -ne $modo) {
             if ($novo -eq 'economia') { Modo-Economia $motivo } else { Modo-Desempenho $motivo }
             $modo = $novo
-            $ultimoSmu = $agora
+            $ultimoTick = [DateTime]::UtcNow
+            $ultimoSmu = $ultimoTick
         }
         # Varredura automatica pos-logon (35s): fecha Steam/Epic/Discord/AMDRSServ que o Windows abriu atrasado
         elseif ($varreduraPosBootAt -ne [DateTime]::MinValue -and $agora -ge $varreduraPosBootAt) {
@@ -465,8 +467,8 @@ while ($true) {
                 Set-RyzenSMU 'desempenho'
             }
         }
-        # A cada 60s: leitura leve para garantir que EC/NitroSense nao resetou SMU (economia) nem boost (desempenho)
-        elseif (($agora - $ultimoSmu).TotalSeconds -ge 60) {
+        # A cada 30s: leitura leve para garantir que EC/NitroSense nao resetou SMU (economia) nem boost/STAPM (desempenho)
+        elseif (($agora - $ultimoSmu).TotalSeconds -ge 30) {
             if ($modo -eq 'economia') {
                 if (-not (Test-SmuEconomia)) {
                     Log 'teto SMU resetado pelo EC: reaplicando (9W/10W)'
@@ -486,11 +488,12 @@ while ($true) {
                     Aplicar-PlanoDesempenho -NaBateria:$naBat
                 }
                 if (-not (Test-SmuDesempenho)) {
-                    Log 'EC do NitroSense derrubou STAPM na tomada (<36W): reaplicando 42W/50W 85C'
+                    Log 'EC do NitroSense derrubou STAPM na tomada (<42W): reaplicando 48W/56W 90C'
                     Set-RyzenSMU 'desempenho'
                 }
             }
-            $ultimoSmu = $agora
+            $ultimoTick = [DateTime]::UtcNow
+            $ultimoSmu = $ultimoTick
         }
     } catch { Log "erro: $_" }
     Start-Sleep -Milliseconds 500
